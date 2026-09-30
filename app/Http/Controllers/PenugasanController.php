@@ -11,74 +11,43 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class PenugasanController extends Controller
 {
-    /**
-     * ============================================================
-     * INDEX
-     * ============================================================
-     */
     public function index(Request $request): View
     {
-        /*
-        |--------------------------------------------------------------------------
-        | VALIDASI FILTER
-        |--------------------------------------------------------------------------
-        */
-
         $request->validate([
-            'search' => [
-                'nullable',
-                'string',
-                'max:255',
-            ],
-
-            'layanan_id' => [
-                'nullable',
-                'integer',
-                'exists:ms_layanan,id',
-            ],
-
-            'dari' => [
-                'nullable',
-                'date',
-            ],
-
-            'sampai' => [
-                'nullable',
-                'date',
-                'after_or_equal:dari',
-            ],
+            'search' => ['nullable', 'string', 'max:255'],
+            'layanan_id' => ['nullable', 'integer', 'exists:ms_layanan,id'],
+            'dari' => ['nullable', 'date'],
+            'sampai' => ['nullable', 'date', 'after_or_equal:dari'],
+            'bulan' => ['nullable', 'integer', 'between:1,12'],
+            'tahun' => ['nullable', 'integer', 'between:2000,2100'],
+            'per_page' => ['nullable', 'integer', 'in:10,25,50,100'],
         ]);
 
+        $search = trim((string) $request->input('search', ''));
 
-        /*
-        |--------------------------------------------------------------------------
-        | SEARCH
-        |--------------------------------------------------------------------------
-        */
+        $bulan = $request->filled('bulan')
+            ? (int) $request->input('bulan')
+            : null;
 
-        $search = trim(
-            (string) $request->input(
-                'search',
-                ''
-            )
-        );
+        $tahun = $request->filled('tahun')
+            ? (int) $request->input('tahun')
+            : null;
 
+        $perPage = (int) $request->input('per_page', 10);
 
-        /*
-        |--------------------------------------------------------------------------
-        | QUERY FILTER
-        |--------------------------------------------------------------------------
-        */
+        if (! in_array($perPage, [10, 25, 50, 100], true)) {
+            $perPage = 10;
+        }
 
-        $filteredQuery = $this->filteredQuery(
+        $filteredQuery = $this->filteredPenugasanQuery(
             $request,
-            $search
+            $search,
+            $bulan,
+            $tahun
         );
-
 
         /*
         |--------------------------------------------------------------------------
@@ -86,13 +55,9 @@ class PenugasanController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $totalPenugasan = Penugasan::query()
-            ->count();
+        $totalPenugasan = Penugasan::query()->count();
 
-
-        $ditampilkan = (clone $filteredQuery)
-            ->count();
-
+        $ditampilkan = (clone $filteredQuery)->count();
 
         $petugasTerlibat = (clone $filteredQuery)
             ->join(
@@ -102,42 +67,35 @@ class PenugasanController extends Controller
                 'penugasan_petugas.penugasan_id'
             )
             ->distinct()
-            ->count(
-                'penugasan_petugas.petugas_id'
-            );
+            ->count('penugasan_petugas.petugas_id');
 
-
-        $jenisLayanan = (clone $filteredQuery)
+        $jenisLayanan = Penugasan::query()
             ->whereNotNull('layanan_id')
             ->distinct()
             ->count('layanan_id');
-
 
         /*
         |--------------------------------------------------------------------------
         | DATA TABEL
         |--------------------------------------------------------------------------
         |
-        | Balik ke versi stabil:
-        |
-        | - terbaru di atas
-        | - 5 data per halaman
+        | Data terbaru ditampilkan terlebih dahulu.
+        | Jumlah data per halaman mengikuti pilihan user.
         |
         */
 
         $penugasans = (clone $filteredQuery)
             ->with([
-                'petugas:id,name,nip,position',
+                'petugas:id,name,nip',
                 'layanan:id,nama_layanan',
             ])
             ->latest('id')
-            ->paginate(5)
+            ->paginate($perPage)
             ->withQueryString();
-
 
         /*
         |--------------------------------------------------------------------------
-        | MASTER PETUGAS
+        | PILIHAN PETUGAS & LAYANAN
         |--------------------------------------------------------------------------
         */
 
@@ -147,93 +105,56 @@ class PenugasanController extends Controller
                 'id',
                 'name',
                 'nip',
-                'position',
             ]);
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | MASTER LAYANAN
-        |--------------------------------------------------------------------------
-        */
-
         $layananOptions = Layanan::query()
-            ->orderBy('id')
+            ->orderBy('nama_layanan')
             ->get([
                 'id',
                 'nama_layanan',
             ]);
 
-
         /*
         |--------------------------------------------------------------------------
-        | PETUGAS YANG ADA DI HALAMAN SAAT INI
+        | PETUGAS PER BARIS PENUGASAN
         |--------------------------------------------------------------------------
-        */
-
-        $visiblePetugasIds = $penugasans
-            ->getCollection()
-            ->flatMap(function (Penugasan $penugasan) {
-                return $penugasan
-                    ->petugas
-                    ->pluck('id');
-            })
-            ->map(
-                fn ($id) => (int) $id
-            )
-            ->unique()
-            ->values();
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | HUBUNGKAN PENUGASAN DENGAN PETUGAS
-        |--------------------------------------------------------------------------
-        |
-        | Digunakan ketika tombol Riwayat diklik.
-        |
         */
 
         $rowPetugasIds = $penugasans
             ->getCollection()
             ->mapWithKeys(function (Penugasan $penugasan) {
                 return [
-                    (string) $penugasan->id =>
-                        $penugasan
-                            ->petugas
-                            ->pluck('id')
-                            ->map(
-                                fn ($id) => (int) $id
-                            )
-                            ->values()
-                            ->all(),
+                    (string) $penugasan->id => $penugasan
+                        ->petugas
+                        ->pluck('id')
+                        ->map(fn ($id) => (int) $id)
+                        ->values()
+                        ->all(),
                 ];
             })
             ->all();
 
-
         /*
         |--------------------------------------------------------------------------
-        | DATA RIWAYAT PETUGAS
+        | RIWAYAT PETUGAS
         |--------------------------------------------------------------------------
+        |
+        | Riwayat hanya disiapkan untuk petugas yang muncul pada halaman aktif.
+        | Detail riwayat tetap mencakup seluruh penugasan petugas tersebut.
+        |
         */
+
+        $pagePetugasIds = collect($rowPetugasIds)
+            ->flatten()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
 
         $historyByPetugas = [];
 
-
-        if ($visiblePetugasIds->isNotEmpty()) {
-
-            /*
-            |--------------------------------------------------------------------------
-            | Data petugas
-            |--------------------------------------------------------------------------
-            */
-
-            $visiblePetugas = Petugas::query()
-                ->whereIn(
-                    'id',
-                    $visiblePetugasIds
-                )
+        if ($pagePetugasIds->isNotEmpty()) {
+            $historyPetugas = Petugas::query()
+                ->whereIn('id', $pagePetugasIds)
                 ->get([
                     'id',
                     'name',
@@ -242,479 +163,112 @@ class PenugasanController extends Controller
                 ])
                 ->keyBy('id');
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | Semua penugasan milik petugas yang sedang terlihat
-            |--------------------------------------------------------------------------
-            */
-
             $historyAssignments = Penugasan::query()
                 ->with([
-                    'petugas:id,name,nip,position',
                     'layanan:id,nama_layanan',
+                    'petugas:id',
                 ])
                 ->whereHas(
                     'petugas',
-                    function (Builder $query) use ($visiblePetugasIds) {
-                        $query->whereIn(
-                            'ms_petugas.id',
-                            $visiblePetugasIds
-                        );
-                    }
+                    fn (Builder $query) => $query
+                        ->whereIn('ms_petugas.id', $pagePetugasIds)
                 )
-                ->orderByDesc('tanggal_mulai')
-                ->orderByDesc('id')
+                ->latest('tanggal_mulai')
+                ->latest('id')
                 ->get();
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | Warna layanan
-            |--------------------------------------------------------------------------
-            */
-
-            $serviceColors = [
-                '#f97316',
-                '#84cc16',
-                '#14b8a6',
-                '#3b82f6',
-                '#8b5cf6',
-                '#22c55e',
-                '#10b981',
-                '#ec4899',
-                '#f59e0b',
-                '#059669',
-            ];
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Susun riwayat per petugas
-            |--------------------------------------------------------------------------
-            */
-
-            foreach ($visiblePetugasIds as $petugasId) {
-
-                $petugas = $visiblePetugas->get(
-                    $petugasId
-                );
-
+            foreach ($pagePetugasIds as $petugasId) {
+                $petugas = $historyPetugas->get($petugasId);
 
                 if (! $petugas) {
                     continue;
                 }
 
-
-                /*
-                |--------------------------------------------------------------------------
-                | Penugasan petugas tersebut
-                |--------------------------------------------------------------------------
-                */
-
-                $petugasHistory = $historyAssignments
-                    ->filter(function (Penugasan $penugasan) use ($petugasId) {
-                        return $penugasan
+                $personAssignments = $historyAssignments
+                    ->filter(
+                        fn (Penugasan $penugasan) => $penugasan
                             ->petugas
                             ->contains(
-                                'id',
-                                (int) $petugasId
-                            );
-                    })
+                                fn ($item) => (int) $item->id === (int) $petugasId
+                            )
+                    )
                     ->values();
 
-
-                /*
-                |--------------------------------------------------------------------------
-                | Daftar pengalaman semua layanan
-                |--------------------------------------------------------------------------
-                */
-
-                $serviceExperience = $layananOptions
-                    ->map(function ($layanan, $index) use (
-                        $petugasHistory,
-                        $serviceColors
-                    ) {
-
-                        $count = $petugasHistory
-                            ->where(
-                                'layanan_id',
-                                $layanan->id
-                            )
+                $services = $layananOptions
+                    ->map(function (Layanan $layanan) use ($personAssignments) {
+                        $count = $personAssignments
+                            ->where('layanan_id', $layanan->id)
                             ->count();
 
-
                         return [
-                            'id' =>
-                                (int) $layanan->id,
-
-                            'name' =>
-                                $layanan->nama_layanan,
-
-                            'count' =>
-                                $count,
-
-                            'color' =>
-                                $serviceColors[
-                                    $index
-                                    %
-                                    count(
-                                        $serviceColors
-                                    )
-                                ],
+                            'id' => $layanan->id,
+                            'name' => $layanan->nama_layanan,
+                            'count' => $count,
                         ];
                     })
                     ->values();
 
-
-                /*
-                |--------------------------------------------------------------------------
-                | Berapa jenis layanan yang pernah dilakukan
-                |--------------------------------------------------------------------------
-                */
-
-                $experiencedServiceCount = $serviceExperience
-                    ->where(
-                        'count',
-                        '>',
-                        0
-                    )
-                    ->count();
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Riwayat detail
-                |--------------------------------------------------------------------------
-                */
-
-                $historyItems = $petugasHistory
-                    ->map(function (Penugasan $penugasan) use (
-                        $serviceColors
-                    ) {
-
-                        $layananId = (int) $penugasan->layanan_id;
-
-                        $colorIndex = max(
-                            0,
-                            $layananId - 1
-                        ) % count(
-                            $serviceColors
-                        );
-
-
+                $history = $personAssignments
+                    ->map(function (Penugasan $penugasan) {
                         return [
-                            'id' =>
-                                (int) $penugasan->id,
-
-                            'layanan' =>
-                                $penugasan
-                                    ->layanan
-                                    ?->nama_layanan
-                                ?? '-',
-
-                            'tempat' =>
-                                $penugasan->tempat
-                                ?: '-',
-
-                            'task_detail' =>
-                                $penugasan->task_detail
-                                ?: '-',
-
-                            'komoditi' =>
-                                $penugasan->komoditi
-                                ?: '-',
-
-                            'tanggal_mulai' =>
-                                $penugasan->tanggal_mulai
-                                    ?->format(
-                                        'd M Y'
-                                    )
-                                ?? '-',
-
-                            'tanggal_selesai' =>
-                                $penugasan->tanggal_selesai
-                                    ?->format(
-                                        'd M Y'
-                                    )
-                                ?? '-',
-
-                            'color' =>
-                                $serviceColors[
-                                    $colorIndex
-                                ],
+                            'id' => $penugasan->id,
+                            'layanan' => $penugasan->layanan?->nama_layanan ?? '-',
+                            'tempat' => $penugasan->tempat ?: '-',
+                            'komoditi' => $penugasan->komoditi ?: '-',
+                            'task_detail' => $penugasan->task_detail ?: '-',
+                            'tanggal_mulai' => $penugasan->tanggal_mulai
+                                ?->format('d M Y') ?? '-',
+                            'tanggal_selesai' => $penugasan->tanggal_selesai
+                                ?->format('d M Y') ?? '-',
                         ];
                     })
-                    ->values()
-                    ->all();
+                    ->values();
 
-
-                /*
-                |--------------------------------------------------------------------------
-                | Data final petugas
-                |--------------------------------------------------------------------------
-                */
-
-                $historyByPetugas[
-                    (string) $petugasId
-                ] = [
-
-                    'id' =>
-                        (int) $petugas->id,
-
-                    'name' =>
-                        $petugas->name,
-
-                    'nip' =>
-                        $petugas->nip
-                        ?: '-',
-
-                    'position' =>
-                        $petugas->position
-                        ?: '-',
-
-                    'experienced_service_count' =>
-                        $experiencedServiceCount,
-
-                    'total_services' =>
-                        $layananOptions->count(),
-
-                    'services' =>
-                        $serviceExperience
-                            ->all(),
-
-                    'history_count' =>
-                        $petugasHistory
-                            ->count(),
-
-                    'history' =>
-                        $historyItems,
+                $historyByPetugas[(string) $petugasId] = [
+                    'id' => $petugas->id,
+                    'name' => $petugas->name,
+                    'nip' => $petugas->nip ?: '-',
+                    'position' => $petugas->position ?: '-',
+                    'experienced_service_count' => $services
+                        ->where('count', '>', 0)
+                        ->count(),
+                    'total_services' => $layananOptions->count(),
+                    'services' => $services->all(),
+                    'history' => $history->all(),
                 ];
             }
         }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | VIEW
-        |--------------------------------------------------------------------------
-        */
 
         return view(
             'penugasan.index',
             compact(
                 'penugasans',
+                'search',
                 'petugasOptions',
                 'layananOptions',
                 'totalPenugasan',
                 'ditampilkan',
                 'petugasTerlibat',
                 'jenisLayanan',
-                'search',
                 'historyByPetugas',
-                'rowPetugasIds'
+                'rowPetugasIds',
+                'perPage',
             )
         );
     }
 
-
-    /**
-     * ============================================================
-     * STORE
-     * ============================================================
-     */
-    public function store(
-        StorePenugasanRequest $request
-    ): RedirectResponse {
-
-        $validated =
-            $request->validated();
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Ambil petugas
-        |--------------------------------------------------------------------------
-        */
-
-        $petugasIds =
-            $validated[
-                'petugas_ids'
-            ];
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Hapus data pivot dari payload tr_penugasan
-        |--------------------------------------------------------------------------
-        */
-
-        unset(
-            $validated[
-                'petugas_ids'
-            ]
-        );
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Kalau request versi baru masih punya force_conflict,
-        | jangan simpan field tersebut.
-        |--------------------------------------------------------------------------
-        */
-
-        unset(
-            $validated[
-                'force_conflict'
-            ]
-        );
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Balik ke logic lama:
-        | langsung simpan, tanpa popup bentrok.
-        |--------------------------------------------------------------------------
-        */
-
-        DB::transaction(
-            function () use (
-                $validated,
-                $petugasIds
-            ) {
-
-                $penugasan =
-                    Penugasan::create(
-                        $validated
-                    );
-
-
-                $penugasan
-                    ->petugas()
-                    ->sync(
-                        $petugasIds
-                    );
-            }
-        );
-
-
-        return back()->with(
-            'success',
-            'Penugasan berhasil ditambahkan.'
-        );
-    }
-
-
-    /**
-     * ============================================================
-     * UPDATE
-     * ============================================================
-     */
-    public function update(
-        UpdatePenugasanRequest $request,
-        Penugasan $penugasan
-    ): RedirectResponse {
-
-        $validated =
-            $request->validated();
-
-
-        $petugasIds =
-            $validated[
-                'petugas_ids'
-            ];
-
-
-        unset(
-            $validated[
-                'petugas_ids'
-            ]
-        );
-
-
-        unset(
-            $validated[
-                'force_conflict'
-            ]
-        );
-
-
-        DB::transaction(
-            function () use (
-                $penugasan,
-                $validated,
-                $petugasIds
-            ) {
-
-                $penugasan->update(
-                    $validated
-                );
-
-
-                $penugasan
-                    ->petugas()
-                    ->sync(
-                        $petugasIds
-                    );
-            }
-        );
-
-
-        return back()->with(
-            'success',
-            'Penugasan berhasil diperbarui.'
-        );
-    }
-
-
-    /**
-     * ============================================================
-     * DELETE
-     * ============================================================
-     */
-    public function destroy(
-        Penugasan $penugasan
-    ): RedirectResponse {
-
-        $penugasan->delete();
-
-
-        return back()->with(
-            'success',
-            'Penugasan berhasil dihapus.'
-        );
-    }
-
-
-    /**
-     * ============================================================
-     * QUERY FILTER
-     * ============================================================
-     */
-    private function filteredQuery(
+    private function filteredPenugasanQuery(
         Request $request,
-        string $search
+        string $search,
+        ?int $bulan,
+        ?int $tahun
     ): Builder {
-
         return Penugasan::query()
-
-            /*
-            |--------------------------------------------------------------------------
-            | SEARCH
-            |--------------------------------------------------------------------------
-            */
-
             ->when(
                 $search !== '',
-                function (
-                    Builder $query
-                ) use ($search) {
-
+                function (Builder $query) use ($search) {
                     $query->where(
-                        function (
-                            Builder $nested
-                        ) use ($search) {
-
+                        function (Builder $nested) use ($search) {
                             $nested
                                 ->where(
                                     'task_detail',
@@ -733,15 +287,9 @@ class PenugasanController extends Controller
                                 )
                                 ->orWhereHas(
                                     'petugas',
-                                    function (
-                                        Builder $petugas
-                                    ) use ($search) {
-
+                                    function (Builder $petugas) use ($search) {
                                         $petugas->where(
-                                            function (
-                                                Builder $match
-                                            ) use ($search) {
-
+                                            function (Builder $match) use ($search) {
                                                 $match
                                                     ->where(
                                                         'name',
@@ -759,82 +307,241 @@ class PenugasanController extends Controller
                                 )
                                 ->orWhereHas(
                                     'layanan',
-                                    function (
-                                        Builder $layanan
-                                    ) use ($search) {
-
-                                        $layanan->where(
+                                    fn (Builder $layanan) => $layanan
+                                        ->where(
                                             'nama_layanan',
                                             'like',
                                             "%{$search}%"
-                                        );
-                                    }
+                                        )
                                 );
                         }
                     );
                 }
             )
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | LAYANAN
-            |--------------------------------------------------------------------------
-            */
-
             ->when(
-                $request->filled(
-                    'layanan_id'
-                ),
-                fn (Builder $query) =>
-                    $query->where(
+                $bulan !== null,
+                fn (Builder $query) => $query
+                    ->whereMonth('tanggal_mulai', $bulan)
+            )
+            ->when(
+                $tahun !== null,
+                fn (Builder $query) => $query
+                    ->whereYear('tanggal_mulai', $tahun)
+            )
+            ->when(
+                $request->filled('layanan_id'),
+                fn (Builder $query) => $query
+                    ->where(
                         'layanan_id',
-                        (int) $request->input(
-                            'layanan_id'
-                        )
+                        (int) $request->input('layanan_id')
                     )
             )
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | TANGGAL MULAI FILTER
-            |--------------------------------------------------------------------------
-            */
-
             ->when(
-                $request->filled(
-                    'dari'
-                ),
-                fn (Builder $query) =>
-                    $query->whereDate(
+                $request->filled('dari'),
+                fn (Builder $query) => $query
+                    ->whereDate(
                         'tanggal_selesai',
                         '>=',
-                        $request->input(
-                            'dari'
-                        )
+                        $request->input('dari')
                     )
             )
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | TANGGAL AKHIR FILTER
-            |--------------------------------------------------------------------------
-            */
-
             ->when(
-                $request->filled(
-                    'sampai'
-                ),
-                fn (Builder $query) =>
-                    $query->whereDate(
+                $request->filled('sampai'),
+                fn (Builder $query) => $query
+                    ->whereDate(
                         'tanggal_mulai',
                         '<=',
-                        $request->input(
-                            'sampai'
-                        )
+                        $request->input('sampai')
                     )
             );
+    }
+
+    /**
+     * Cari penugasan petugas yang tanggalnya bertabrakan.
+     *
+     * Rentang tanggal dianggap bentrok jika:
+     * tanggal_mulai_lama <= tanggal_selesai_baru
+     * DAN
+     * tanggal_selesai_lama >= tanggal_mulai_baru.
+     */
+    private function findScheduleConflicts(
+        array $petugasIds,
+        string $tanggalMulai,
+        string $tanggalSelesai,
+        ?int $excludePenugasanId = null
+    ): array {
+        $petugasIds = collect($petugasIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($petugasIds)) {
+            return [];
+        }
+
+        $assignments = Penugasan::query()
+            ->with([
+                'layanan:id,nama_layanan',
+                'petugas:id,name,nip',
+            ])
+            ->whereDate('tanggal_mulai', '<=', $tanggalSelesai)
+            ->whereDate('tanggal_selesai', '>=', $tanggalMulai)
+            ->when(
+                $excludePenugasanId !== null,
+                fn (Builder $query) => $query
+                    ->where('id', '!=', $excludePenugasanId)
+            )
+            ->whereHas(
+                'petugas',
+                fn (Builder $query) => $query
+                    ->whereIn('ms_petugas.id', $petugasIds)
+            )
+            ->orderBy('tanggal_mulai')
+            ->orderBy('id')
+            ->get();
+
+        $conflicts = [];
+
+        foreach ($assignments as $assignment) {
+            foreach ($assignment->petugas as $petugas) {
+                if (! in_array((int) $petugas->id, $petugasIds, true)) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'penugasan_id' => (int) $assignment->id,
+                    'petugas_id' => (int) $petugas->id,
+                    'petugas_name' => $petugas->name,
+                    'nip' => $petugas->nip,
+                    'layanan' => $assignment->layanan?->nama_layanan ?? '-',
+                    'tempat' => $assignment->tempat ?: '-',
+                    'komoditi' => $assignment->komoditi ?: '-',
+                    'tanggal_mulai' => (string) $assignment
+                        ->getRawOriginal('tanggal_mulai'),
+                    'tanggal_selesai' => (string) $assignment
+                        ->getRawOriginal('tanggal_selesai'),
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    public function store(
+        StorePenugasanRequest $request
+    ): RedirectResponse {
+        $validated = $request->validated();
+
+        $petugasIds = $validated['petugas_ids'];
+
+        /*
+        |--------------------------------------------------------------------------
+        | PERINGATAN JADWAL BENTROK
+        |--------------------------------------------------------------------------
+        |
+        | Pengecekan hanya dilewati setelah user menekan "Tetap Simpan".
+        | Data belum disimpan selama user belum memberikan konfirmasi.
+        |
+        */
+
+        if (! $request->boolean('allow_overlap')) {
+            $conflicts = $this->findScheduleConflicts(
+                $petugasIds,
+                $validated['tanggal_mulai'],
+                $validated['tanggal_selesai']
+            );
+
+            if (! empty($conflicts)) {
+                return back()
+                    ->withInput()
+                    ->with(
+                        'schedule_conflicts',
+                        $conflicts
+                    )
+                    ->with(
+                        'schedule_warning_mode',
+                        'create'
+                    );
+            }
+        }
+
+        unset($validated['petugas_ids']);
+
+        $penugasan = Penugasan::create($validated);
+
+        $penugasan
+            ->petugas()
+            ->sync($petugasIds);
+
+        return back()->with(
+            'success',
+            'Penugasan berhasil ditambahkan.'
+        );
+    }
+
+    public function update(
+        UpdatePenugasanRequest $request,
+        Penugasan $penugasan
+    ): RedirectResponse {
+        $validated = $request->validated();
+
+        $petugasIds = $validated['petugas_ids'];
+
+        /*
+        |--------------------------------------------------------------------------
+        | PERINGATAN JADWAL BENTROK SAAT EDIT
+        |--------------------------------------------------------------------------
+        |
+        | Penugasan yang sedang diedit tidak dibandingkan dengan dirinya sendiri.
+        |
+        */
+
+        if (! $request->boolean('allow_overlap')) {
+            $conflicts = $this->findScheduleConflicts(
+                $petugasIds,
+                $validated['tanggal_mulai'],
+                $validated['tanggal_selesai'],
+                (int) $penugasan->id
+            );
+
+            if (! empty($conflicts)) {
+                return back()
+                    ->withInput()
+                    ->with(
+                        'schedule_conflicts',
+                        $conflicts
+                    )
+                    ->with(
+                        'schedule_warning_mode',
+                        'edit'
+                    );
+            }
+        }
+
+        unset($validated['petugas_ids']);
+
+        $penugasan->update($validated);
+
+        $penugasan
+            ->petugas()
+            ->sync($petugasIds);
+
+        return back()->with(
+            'success',
+            'Penugasan berhasil diperbarui.'
+        );
+    }
+
+    public function destroy(
+        Penugasan $penugasan
+    ): RedirectResponse {
+        $penugasan->delete();
+
+        return back()->with(
+            'success',
+            'Penugasan berhasil dihapus.'
+        );
     }
 }

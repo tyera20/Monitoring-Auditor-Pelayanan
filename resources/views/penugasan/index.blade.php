@@ -105,6 +105,27 @@
 
     /*
     |--------------------------------------------------------------------------
+    | WARNING JADWAL BENTROK
+    |--------------------------------------------------------------------------
+    */
+
+    $scheduleConflicts = session('schedule_conflicts', []);
+
+    $scheduleWarningMode = session('schedule_warning_mode');
+
+    if (!empty($scheduleConflicts)) {
+        $errorMode =
+            $scheduleWarningMode
+            ??
+            (
+                old('_method') === 'PUT'
+                    ? 'edit'
+                    : 'create'
+            );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | PALETTE TABEL
     |--------------------------------------------------------------------------
     |
@@ -470,6 +491,64 @@
 
     .pen-column-option input {
         accent-color: var(--green);
+    }
+
+
+    /* =========================================================
+       JUMLAH DATA PER HALAMAN
+    ========================================================= */
+
+    .pen-table-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+
+        padding: 10px 14px;
+
+        border-bottom: 1px solid var(--border);
+
+        background: #ffffff;
+    }
+
+    .pen-length-form {
+        display: inline-flex;
+        align-items: center;
+
+        gap: 7px;
+
+        color: var(--muted);
+
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    .pen-length-select {
+        min-width: 70px;
+        height: 34px;
+
+        padding: 5px 28px 5px 10px;
+
+        border: 1px solid var(--border);
+        border-radius: 8px;
+
+        outline: none;
+
+        background: var(--background);
+        color: var(--text);
+
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+
+        cursor: pointer;
+    }
+
+    .pen-length-select:focus {
+        border-color: var(--green);
+
+        box-shadow:
+            0 0 0 1px
+            var(--green);
     }
 
 
@@ -1763,9 +1842,135 @@
         }
     }
 
+    /* =========================================================
+       WARNING JADWAL BENTROK
+    ========================================================= */
+
+    .pen-schedule-warning-backdrop {
+        position: fixed;
+        z-index: 120;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(15, 23, 42, .48);
+        backdrop-filter: blur(2px);
+    }
+
+    .pen-schedule-warning {
+        width: min(560px, 100%);
+        max-height: min(720px, calc(100vh - 40px));
+        overflow-y: auto;
+        border: 1px solid #fde68a;
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 24px 64px rgba(15, 23, 42, .22);
+    }
+
+    .pen-schedule-warning-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 20px 20px 14px;
+    }
+
+    .pen-schedule-warning-icon {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        flex: 0 0 40px;
+        place-items: center;
+        border-radius: 12px;
+        background: #fffbeb;
+        color: #b45309;
+    }
+
+    .pen-schedule-warning-icon svg {
+        width: 22px;
+        height: 22px;
+        stroke: currentColor;
+    }
+
+    .pen-schedule-warning-title {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 750;
+        color: #0f172a;
+    }
+
+    .pen-schedule-warning-subtitle {
+        margin: 5px 0 0;
+        font-size: 13px;
+        line-height: 1.55;
+        color: #64748b;
+    }
+
+    .pen-schedule-warning-body {
+        padding: 0 20px 18px;
+    }
+
+    .pen-schedule-warning-list {
+        display: grid;
+        gap: 10px;
+    }
+
+    .pen-schedule-warning-item {
+        padding: 13px 14px;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        background: #f8fafc;
+    }
+
+    .pen-schedule-warning-name {
+        font-size: 13px;
+        font-weight: 750;
+        color: #0f172a;
+    }
+
+    .pen-schedule-warning-service {
+        margin-top: 4px;
+        font-size: 12px;
+        font-weight: 650;
+        color: #475569;
+    }
+
+    .pen-schedule-warning-meta {
+        margin-top: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #64748b;
+    }
+
+    .pen-schedule-warning-note {
+        margin: 14px 0 0;
+        padding: 11px 12px;
+        border-radius: 10px;
+        background: #fffbeb;
+        font-size: 12px;
+        line-height: 1.55;
+        color: #92400e;
+    }
+
+    .pen-schedule-warning-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 14px 20px 20px;
+        border-top: 1px solid #f1f5f9;
+    }
+
     @media (max-width: 520px) {
         .pen-stats {
             grid-template-columns: 1fr;
+        }
+
+        .pen-schedule-warning-actions {
+            flex-direction: column-reverse;
+        }
+
+        .pen-schedule-warning-actions .pen-button {
+            width: 100%;
+            justify-content: center;
         }
     }
 </style>
@@ -1783,7 +1988,8 @@
         @js($editingId),
         @js($historyByPetugas),
         @js($rowPetugasIds),
-        @js(route('penugasan.store'))
+        @js(route('penugasan.store')),
+        @js($scheduleConflicts)
     )"
 
     x-init="init()"
@@ -1952,6 +2158,13 @@
             >
 
                 <input
+                    type="hidden"
+                    name="per_page"
+                    value="{{ request('per_page', 10) }}"
+                >
+
+
+                <input
                     type="search"
                     name="search"
                     value="{{ $search }}"
@@ -2116,6 +2329,98 @@
                 </div>
 
             </div>
+
+        </div>
+
+
+        {{-- =================================================
+             JUMLAH DATA PER HALAMAN
+        ================================================== --}}
+
+        <div class="pen-table-toolbar">
+
+            <form
+                action="{{ route('penugasan.index') }}"
+                method="GET"
+                class="pen-length-form"
+            >
+
+                <input
+                    type="hidden"
+                    name="search"
+                    value="{{ request('search') }}"
+                >
+
+                <input
+                    type="hidden"
+                    name="layanan_id"
+                    value="{{ request('layanan_id') }}"
+                >
+
+                <input
+                    type="hidden"
+                    name="dari"
+                    value="{{ request('dari') }}"
+                >
+
+                <input
+                    type="hidden"
+                    name="sampai"
+                    value="{{ request('sampai') }}"
+                >
+
+                @if(request()->filled('bulan'))
+                    <input
+                        type="hidden"
+                        name="bulan"
+                        value="{{ request('bulan') }}"
+                    >
+                @endif
+
+                @if(request()->filled('tahun'))
+                    <input
+                        type="hidden"
+                        name="tahun"
+                        value="{{ request('tahun') }}"
+                    >
+                @endif
+
+
+                <span>
+                    Tampilkan
+                </span>
+
+
+                <select
+                    name="per_page"
+                    class="pen-length-select"
+                    aria-label="Jumlah data per halaman"
+                    onchange="this.form.submit()"
+                >
+
+                    @foreach([10, 25, 50, 100] as $size)
+
+                        <option
+                            value="{{ $size }}"
+                            {{
+                                (int) request('per_page', 10) === $size
+                                    ? 'selected'
+                                    : ''
+                            }}
+                        >
+                            {{ $size }}
+                        </option>
+
+                    @endforeach
+
+                </select>
+
+
+                <span>
+                    data
+                </span>
+
+            </form>
 
         </div>
 
@@ -2716,6 +3021,8 @@
 
 
         <form
+            x-ref="penugasanForm"
+
             :action="
                 drawerMode === 'edit'
                     ? updateUrl
@@ -2728,6 +3035,12 @@
         >
 
             @csrf
+
+            <input
+                type="hidden"
+                name="allow_overlap"
+                :value="allowOverlap ? 1 : 0"
+            >
 
 
             <template x-if="drawerMode === 'edit'">
@@ -3238,6 +3551,111 @@
         @endif
 
     </aside>
+
+
+    {{-- =====================================================
+         WARNING JADWAL BENTROK
+    ====================================================== --}}
+
+    <div
+        x-show="scheduleWarningOpen"
+        x-cloak
+        class="pen-schedule-warning-backdrop"
+        @click.self="cancelScheduleOverlap()"
+    >
+        <div
+            class="pen-schedule-warning"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-warning-title"
+        >
+            <div class="pen-schedule-warning-head">
+                <div class="pen-schedule-warning-icon">
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                    >
+                        <path d="M12 9v4" stroke-width="2" stroke-linecap="round"></path>
+                        <path d="M12 17h.01" stroke-width="2.5" stroke-linecap="round"></path>
+                        <path
+                            d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        ></path>
+                    </svg>
+                </div>
+
+                <div>
+                    <h3 id="schedule-warning-title" class="pen-schedule-warning-title">
+                        Jadwal Petugas Bertabrakan
+                    </h3>
+                    <p class="pen-schedule-warning-subtitle">
+                        Ada petugas yang sudah memiliki penugasan pada tanggal yang sama atau rentang tanggal yang beririsan.
+                    </p>
+                </div>
+            </div>
+
+            <div class="pen-schedule-warning-body">
+                <div class="pen-schedule-warning-list">
+                    <template
+                        x-for="conflict in scheduleConflicts"
+                        :key="`${conflict.penugasan_id}-${conflict.petugas_id}`"
+                    >
+                        <div class="pen-schedule-warning-item">
+                            <div
+                                class="pen-schedule-warning-name"
+                                x-text="conflict.petugas_name"
+                            ></div>
+
+                            <div
+                                class="pen-schedule-warning-service"
+                                x-text="conflict.layanan"
+                            ></div>
+
+                            <div class="pen-schedule-warning-meta">
+                                <span x-text="conflict.tempat"></span>
+                                <span> · </span>
+                                <span
+                                    x-text="formatAssignmentDate(conflict.tanggal_mulai, conflict.tanggal_selesai)"
+                                ></span>
+
+                                <template x-if="conflict.komoditi && conflict.komoditi !== '-'">
+                                    <span>
+                                        · <span x-text="conflict.komoditi"></span>
+                                    </span>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <p class="pen-schedule-warning-note">
+                    Data belum disimpan. Pilih <strong>Tetap Simpan</strong> jika penugasan ganda pada periode tersebut memang benar.
+                </p>
+            </div>
+
+            <div class="pen-schedule-warning-actions">
+                <button
+                    type="button"
+                    class="pen-button"
+                    @click="cancelScheduleOverlap()"
+                >
+                    Kembali
+                </button>
+
+                <button
+                    type="button"
+                    class="pen-button pen-button-primary"
+                    @click="confirmScheduleOverlap()"
+                >
+                    Tetap Simpan
+                </button>
+            </div>
+        </div>
+    </div>
 
 
     {{-- =====================================================
@@ -3925,7 +4343,8 @@
         editingId,
         historyByPetugas,
         rowPetugasIds,
-        createUrl
+        createUrl,
+        scheduleConflicts
     ) {
         return {
 
@@ -4000,6 +4419,16 @@
 
             formError:
                 '',
+
+            scheduleWarningOpen:
+                false,
+
+            scheduleConflicts:
+                scheduleConflicts
+                ?? [],
+
+            allowOverlap:
+                false,
 
 
             /*
@@ -4114,6 +4543,9 @@
                     }
 
 
+                    this.scheduleWarningOpen =
+                        this.scheduleConflicts.length > 0;
+
                     return;
                 }
 
@@ -4126,6 +4558,10 @@
                         initialForm
                     );
                 }
+
+
+                this.scheduleWarningOpen =
+                    this.scheduleConflicts.length > 0;
             },
 
 
@@ -4807,6 +5243,9 @@
                 this.formError =
                     '';
 
+                this.allowOverlap =
+                    false;
+
                 this.form = {
                     layanan_id: null,
                     tempat: '',
@@ -5334,6 +5773,51 @@
 
             /*
             |--------------------------------------------------------------------------
+            | BATAL WARNING BENTROK
+            |--------------------------------------------------------------------------
+            */
+
+            cancelScheduleOverlap()
+            {
+                this.scheduleWarningOpen =
+                    false;
+
+                this.allowOverlap =
+                    false;
+            },
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | TETAP SIMPAN MESKI BENTROK
+            |--------------------------------------------------------------------------
+            */
+
+            confirmScheduleOverlap()
+            {
+                this.allowOverlap =
+                    true;
+
+                this.scheduleWarningOpen =
+                    false;
+
+                this.$nextTick(
+                    () => {
+                        if (
+                            this.$refs
+                                .penugasanForm
+                        ) {
+                            this.$refs
+                                .penugasanForm
+                                .requestSubmit();
+                        }
+                    }
+                );
+            },
+
+
+            /*
+            |--------------------------------------------------------------------------
             | OPEN HISTORY
             |--------------------------------------------------------------------------
             */
@@ -5571,6 +6055,15 @@
 
             handleEscape()
             {
+                if (
+                    this.scheduleWarningOpen
+                ) {
+                    this.cancelScheduleOverlap();
+
+                    return;
+                }
+
+
                 if (
                     this.historyOpen
                 ) {
